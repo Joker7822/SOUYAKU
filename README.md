@@ -1,4 +1,4 @@
-# SOUYAKU Interpreter 1.3.1
+# SOUYAKU Interpreter 1.3.3
 
 Android向けのリアルタイム相互通訳アプリです。1.3.0では、従来の対面通訳に加えて **トークン通訳通話** を追加しました。
 
@@ -61,13 +61,15 @@ npm start
 curl http://127.0.0.1:8787/health
 ```
 
-### エミュレーター
+### 既定の接続先
 
-アプリの既定URLは次です。
+アプリの初期接続先は次です。
 
 ```text
-ws://10.0.2.2:8787
+wss://souyaku-token-relay.onrender.com
 ```
+
+ローカル開発時だけ、接続サーバー欄で `ws://10.0.2.2:8787` などへ手動変更できます。
 
 ### Android実機2台
 
@@ -77,7 +79,7 @@ ws://10.0.2.2:8787
 ws://192.168.x.x:8787
 ```
 
-本番公開では **必ずTLSを終端し `wss://` を使用してください**。Caddy / nginx / Cloud Load BalancerなどでTLSを終端し、Node.jsサーバーへリバースプロキシしてください。
+本番公開では **必ずTLSを終端し `wss://` を使用してください**。
 
 ## トークン通話の手順
 
@@ -106,8 +108,8 @@ ws://192.168.x.x:8787
 
 ## バージョン
 
-- versionName: `1.3.1`
-- versionCode: `6`
+- versionName: `1.3.3`
+- versionCode: `8`
 - applicationId: `com.epic.souyaku.interpreter`
 - minSdk: 26
 - targetSdk: 36
@@ -117,17 +119,22 @@ ws://192.168.x.x:8787
 - AndroidX / Jetpack Compose
 - Google ML Kit Translate 17.0.3
 - Google ML Kit Language ID 17.0.6
-- OkHttp 5.5.0 (Android WebSocket)
+- OkHttp 5.3.2 (Android WebSocket; compileSdk 36 compatible)
 - server: ws 8.21.3
-
-## ビルド検証について
-
-この作業環境にはAndroid SDK / Gradle Wrapperが無いため、APKの最終コンパイルは未確認です。Kotlin/Nodeソースの構文・ファイル整合性とZIP整合性は別途確認します。実機では2台接続、マイク認識、翻訳モデル、TTS、ネットワーク切断復帰を確認してください。
 
 ## 1.3.1 Render WSS deployment
 
 - Added root `render.yaml` for Render Blueprint deployment.
 - Server binds to Render's `PORT` on `0.0.0.0` and exposes `/health`.
 - Android default token-call server can be supplied at build time with `SOUYAKU_TOKEN_CALL_SERVER_URL`.
-- For public Render connections, use the generated `wss://...onrender.com` URL.
-- See `RENDER_DEPLOY.md` for deployment and two-device test steps.
+
+## 1.3.2 build compatibility fix
+
+- Fixed Android build failure caused by OkHttp 5.5.0 requiring compileSdk 37.
+- Pinned OkHttp to 5.3.2 so the project can remain on compileSdk / targetSdk 36 with AGP 8.13.2.
+
+## 1.3.3 default Render WSS endpoint
+
+- Default token-call server: `wss://souyaku-token-relay.onrender.com`
+- Legacy default `ws://10.0.2.2:8787` is migrated automatically on app upgrade.
+- A user-entered custom WSS endpoint is preserved.
