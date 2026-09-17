@@ -13,6 +13,35 @@ function validToken(value) {
   return typeof value === 'string' && /^[A-Z0-9]{6,12}$/.test(value);
 }
 
+function roomFor(ws) {
+  const meta = clients.get(ws);
+  return meta ? rooms.get(meta.token) : null;
+}
+
+function peerLanguageFor(ws) {
+  const meta = clients.get(ws);
+  const room = roomFor(ws);
+  if (!meta || !room) return '';
+  for (const [clientId, peer] of room.entries()) {
+    if (clientId === meta.clientId) continue;
+    const peerMeta = clients.get(peer);
+    const language = String(peerMeta?.language || '').slice(0, 32);
+    if (language) return language;
+  }
+  return '';
+}
+
+function sendPeerLanguage(ws) {
+  const peerLanguage = peerLanguageFor(ws);
+  if (peerLanguage) send(ws, { type: 'peer_language', language: peerLanguage });
+}
+
+function broadcastPeerLanguages(token) {
+  const room = rooms.get(token);
+  if (!room) return;
+  for (const ws of room.values()) sendPeerLanguage(ws);
+}
+
 function broadcastPeerCount(token) {
   const room = rooms.get(token);
   if (!room) return;
@@ -27,8 +56,12 @@ function leave(ws) {
   const room = rooms.get(meta.token);
   if (!room) return;
   room.delete(meta.clientId);
-  if (room.size === 0) rooms.delete(meta.token);
-  else broadcastPeerCount(meta.token);
+  if (room.size === 0) {
+    rooms.delete(meta.token);
+  } else {
+    broadcastPeerCount(meta.token);
+    broadcastPeerLanguages(meta.token);
+  }
 }
 
 const server = http.createServer((req, res) => {
@@ -85,6 +118,7 @@ wss.on('connection', (ws) => {
       room.set(message.clientId, ws);
       send(ws, { type: 'joined', peerCount: room.size });
       broadcastPeerCount(message.token);
+      broadcastPeerLanguages(message.token);
       return;
     }
 
@@ -94,10 +128,22 @@ wss.on('connection', (ws) => {
       return;
     }
 
+    if (message.type === 'language_update') {
+      meta.language = String(message.language || '').slice(0, 32);
+      broadcastPeerLanguages(meta.token);
+      return;
+    }
+
     if (message.type === 'utterance') {
       const text = typeof message.text === 'string' ? message.text.trim().slice(0, 4000) : '';
       const sourceLanguage = typeof message.sourceLanguage === 'string'
         ? message.sourceLanguage.slice(0, 32)
+        : '';
+      const targetLanguage = typeof message.targetLanguage === 'string'
+        ? message.targetLanguage.slice(0, 32)
+        : '';
+      const translatedText = typeof message.translatedText === 'string'
+        ? message.translatedText.trim().slice(0, 4000)
         : '';
       if (!text) return;
       const room = rooms.get(meta.token);
@@ -107,7 +153,9 @@ wss.on('connection', (ws) => {
         senderId: meta.clientId,
         sequence: Number.isSafeInteger(message.sequence) ? message.sequence : 0,
         sourceLanguage,
+        targetLanguage,
         text,
+        translatedText,
       };
       for (const [clientId, peer] of room.entries()) {
         if (clientId !== meta.clientId) send(peer, payload);
