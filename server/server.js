@@ -13,40 +13,25 @@ function validToken(value) {
   return typeof value === 'string' && /^[A-Z0-9]{6,12}$/.test(value);
 }
 
-function roomFor(ws) {
-  const meta = clients.get(ws);
-  return meta ? rooms.get(meta.token) : null;
-}
-
-function peerLanguageFor(ws) {
-  const meta = clients.get(ws);
-  const room = roomFor(ws);
-  if (!meta || !room) return '';
-  for (const [clientId, peer] of room.entries()) {
-    if (clientId === meta.clientId) continue;
-    const peerMeta = clients.get(peer);
-    const language = String(peerMeta?.language || '').slice(0, 32);
-    if (language) return language;
-  }
-  return '';
-}
-
-function sendPeerLanguage(ws) {
-  const peerLanguage = peerLanguageFor(ws);
-  if (peerLanguage) send(ws, { type: 'peer_language', language: peerLanguage });
-}
-
-function broadcastPeerLanguages(token) {
-  const room = rooms.get(token);
-  if (!room) return;
-  for (const ws of room.values()) sendPeerLanguage(ws);
-}
-
 function broadcastPeerCount(token) {
   const room = rooms.get(token);
   if (!room) return;
   const peerCount = room.size;
   for (const ws of room.values()) send(ws, { type: 'peer_count', peerCount });
+}
+
+function broadcastPeerLanguages(token) {
+  const room = rooms.get(token);
+  if (!room) return;
+  for (const [clientId, ws] of room.entries()) {
+    let peerLanguage = '';
+    for (const [otherId, peerWs] of room.entries()) {
+      if (otherId === clientId) continue;
+      peerLanguage = String(clients.get(peerWs)?.language || '').slice(0, 32);
+      break;
+    }
+    send(ws, { type: 'peer_language', language: peerLanguage });
+  }
 }
 
 function leave(ws) {
@@ -56,9 +41,8 @@ function leave(ws) {
   const room = rooms.get(meta.token);
   if (!room) return;
   room.delete(meta.clientId);
-  if (room.size === 0) {
-    rooms.delete(meta.token);
-  } else {
+  if (room.size === 0) rooms.delete(meta.token);
+  else {
     broadcastPeerCount(meta.token);
     broadcastPeerLanguages(meta.token);
   }
