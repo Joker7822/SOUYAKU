@@ -1,0 +1,3 @@
+# Copy the line below into android/gradle.properties after Render has created your service URL.
+# Example: SOUYAKU_TOKEN_CALL_SERVER_URL=wss://souyaku-token-relay.onrender.com
+SOUYAKU_TOKEN_CALL_SERVER_URL=wss://souyaku-token-relay.onrender.com

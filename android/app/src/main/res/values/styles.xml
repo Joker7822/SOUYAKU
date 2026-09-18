@@ -1,0 +1,9 @@
+<resources>
+    <style name="Theme.Souyaku" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:statusBarColor">#06080E</item>
+        <item name="android:navigationBarColor">#06080E</item>
+        <item name="android:windowActionModeOverlay">true</item>
+    </style>
+</resources>
