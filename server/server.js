@@ -1,9 +1,63 @@
 import http from 'node:http';
 import { WebSocketServer, WebSocket } from 'ws';
+import { runSouyakuAgent, SOUYAKU_AI_MODEL } from './ai-agent.js';
 
 const port = Number(process.env.PORT || 8787);
 const rooms = new Map();
 const clients = new WeakMap();
+const aiRateLimits = new Map();
+const AI_RATE_WINDOW_MS = 10 * 60 * 1000;
+const AI_RATE_MAX = Number(process.env.SOUYAKU_AI_RATE_MAX || 30);
+
+function clientAddress(req) {
+  const forwarded = req.headers['x-forwarded-for'];
+  if (typeof forwarded === 'string' && forwarded.trim()) return forwarded.split(',')[0].trim();
+  return req.socket.remoteAddress || 'unknown';
+}
+
+function consumeAiRateLimit(req) {
+  const now = Date.now();
+  const key = clientAddress(req);
+  const current = aiRateLimits.get(key);
+  if (!current || now >= current.resetAt) {
+    aiRateLimits.set(key, { count: 1, resetAt: now + AI_RATE_WINDOW_MS });
+    return { allowed: true, remaining: Math.max(0, AI_RATE_MAX - 1) };
+  }
+  if (current.count >= AI_RATE_MAX) return { allowed: false, remaining: 0, resetAt: current.resetAt };
+  current.count += 1;
+  return { allowed: true, remaining: Math.max(0, AI_RATE_MAX - current.count) };
+}
+
+function jsonResponse(res, status, payload, extraHeaders = {}) {
+  res.writeHead(status, {
+    'content-type': 'application/json; charset=utf-8',
+    'cache-control': 'no-store',
+    ...extraHeaders,
+  });
+  res.end(JSON.stringify(payload));
+}
+
+async function readJsonBody(req, maxBytes = 96 * 1024) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > maxBytes) {
+      const error = new Error('Request body too large');
+      error.code = 'body_too_large';
+      throw error;
+    }
+    chunks.push(chunk);
+  }
+  if (chunks.length === 0) return {};
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+  } catch {
+    const error = new Error('Invalid JSON');
+    error.code = 'invalid_json';
+    throw error;
+  }
+}
 
 function send(ws, payload) {
   if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(payload));
@@ -48,19 +102,54 @@ function leave(ws) {
   }
 }
 
-const server = http.createServer((req, res) => {
-  if (req.url === '/health') {
-    res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
-    res.end(JSON.stringify({ ok: true, rooms: rooms.size, uptimeSeconds: Math.floor(process.uptime()) }));
+const server = http.createServer(async (req, res) => {
+  if (req.method === 'POST' && req.url === '/ai/agent') {
+    if (!process.env.OPENAI_API_KEY) {
+      jsonResponse(res, 503, { ok: false, error: 'ai_not_configured', message: 'SOUYAKU Agent is not configured on this server.' });
+      return;
+    }
+    const rate = consumeAiRateLimit(req);
+    if (!rate.allowed) {
+      const retryAfter = Math.max(1, Math.ceil((rate.resetAt - Date.now()) / 1000));
+      jsonResponse(res, 429, { ok: false, error: 'rate_limited', message: 'Too many AI requests.' }, { 'retry-after': String(retryAfter) });
+      return;
+    }
+    try {
+      const body = await readJsonBody(req);
+      const agentResult = await runSouyakuAgent(body);
+      jsonResponse(res, 200, { ok: true, ...agentResult }, { 'x-ratelimit-remaining': String(rate.remaining) });
+    } catch (error) {
+      const code = error?.code || 'ai_error';
+      const status = code === 'body_too_large' ? 413
+        : code === 'invalid_json' || code === 'empty_conversation' ? 400
+        : code === 'ai_timeout' ? 504
+        : 502;
+      console.error('SOUYAKU Agent error:', code, error?.message || error);
+      jsonResponse(res, status, { ok: false, error: code, message: error?.message || 'AI request failed.' });
+    }
     return;
   }
-  if (req.url === '/' || req.url === '') {
-    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
-    res.end(JSON.stringify({ service: 'SOUYAKU token relay', websocket: true, health: '/health' }));
+
+  if (req.method === 'GET' && req.url === '/health') {
+    jsonResponse(res, 200, {
+      ok: true,
+      rooms: rooms.size,
+      uptimeSeconds: Math.floor(process.uptime()),
+      aiConfigured: Boolean(process.env.OPENAI_API_KEY),
+      aiModel: SOUYAKU_AI_MODEL,
+    });
     return;
   }
-  res.writeHead(404, { 'content-type': 'application/json; charset=utf-8' });
-  res.end(JSON.stringify({ error: 'not_found' }));
+  if (req.method === 'GET' && (req.url === '/' || req.url === '')) {
+    jsonResponse(res, 200, {
+      service: 'SOUYAKU token relay',
+      websocket: true,
+      health: '/health',
+      aiAgent: '/ai/agent',
+    });
+    return;
+  }
+  jsonResponse(res, 404, { error: 'not_found' });
 });
 
 const wss = new WebSocketServer({ server, maxPayload: 16 * 1024, perMessageDeflate: false });
@@ -152,6 +241,10 @@ wss.on('connection', (ws) => {
 });
 
 const heartbeat = setInterval(() => {
+  const now = Date.now();
+  for (const [key, limit] of aiRateLimits.entries()) {
+    if (now >= limit.resetAt) aiRateLimits.delete(key);
+  }
   for (const ws of wss.clients) {
     if (ws.isAlive === false) {
       leave(ws);
