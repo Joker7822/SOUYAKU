@@ -11,3 +11,9 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: SOUYAKU_AI_MODEL
+        value: gpt-5.6-luna
+      - key: SOUYAKU_AI_RATE_MAX
+        value: "30"
